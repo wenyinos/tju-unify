@@ -50,10 +50,8 @@
 - **未来规划：** 完善接口，加入服务注册Eureka、登录相关拦截与 JWT 配置
 
 ### 三、新闻推送
-- SchoolNews 的存库与查询
-- 对外 /schoolNews/getByFlag（按 flag 分页列表）、/schoolNews/detail（按 id 详情）；
-- application.yml 里配置了多条校园新闻栏目 URL；
-- **未来规划：** 加入 WebMagic 把爬取结果写入库。
+- HTTP 查询接口（列表/详情）
+- 定时爬虫入库（WebMagic + MyBatis-Plus）模块的数据来源是定时爬虫 TjuNewsCrawlerTask（WebMagic），启动后按计划任务跑
 
 ### 四、校园电商平台微服务
 - **订单部分：**  
@@ -77,7 +75,7 @@
 
 
 ### 五、其它
-- `conv-common` 公共模块，其他服务依赖该模块，有一些公共的依赖已经引入，现在已有结果封装，异常的统一处理
+- `conv-common` 公共模块，公共的依赖的引入，以及结果封装，异常的统一处理
 - `conv-gateway` 网关，用于路由转发和鉴权  
 <img src="img_1.png" alt="img_1.png" width="40%">
 
