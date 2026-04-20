@@ -20,7 +20,7 @@
   - log_before_model：每次调用模型前记录消息条数及简要内容。
   - report_prompt_switch：按上下文动态切换/注入报告相关 Prompt。
 - **入口：** agent/react_agent.py 的 ReactAgent，对外提供 execute_stream(query) 流式输出。
-  ![img.png](img.png)
+  ![img.png](docs/img.png)
 
 **4.记忆功能**
 - 保留最近 10 轮完整对话作为**滑动窗口**
@@ -34,7 +34,7 @@
 息写入运行时历史，rag_summarize 工具调用时从中读取历史内容并传递给 rag.rag_summarize
 (history=...)，确保摘要生成能够真正基于完整的对话上下文。（原始版本仅仅针对当前query做拓展）
 
-<img src="img_2.png" alt="img_2.png" width="80%">  
+<img src="docs/img_2.png" alt="img_2.png" width="80%">  
 
 5.未来规划
 - 工具调用：调用后端其他接口，例如，当用户意图涉及“跑腿下单”“空教室查询”等操作类需求时，系统可自动调用对应后端API完成服务闭环，实现从信息咨询到业务办理的功能延伸。
