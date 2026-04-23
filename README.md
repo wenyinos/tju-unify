@@ -192,6 +192,62 @@ tju-unify/
 
 - **与新闻信息联动**：用户可以询问天大今日新闻，小智助手将调用新闻相关接口，并将今日新闻展示给用户
 
+### 2.2.2 相关技术
+
+**`tian-agent`** 的技术栈：检索、ReAct、记忆，以及 **HTTP 接入、模型与配置、校园工具调用、提示词与 RAG 编排、日志观测** 等，整体关系：**网关鉴权上下文 → FastAPI 会话与流式 → Agent 循环 → 工具（校园 API / RAG / 演示工具）→ 记忆**。
+
+#### 检索（RAG）
+
+- **基础检索**：**Chroma** + 向量相似度；支持将 **txt / pdf / csv** 等资料入库并向量检索，入口服务见 `rag/vectore_store.py`（文件名如此）。  
+- **高级检索**（`rag/advanced_retrieval.py`）：  
+  - **MQE（多查询扩展）**：由模型生成多条语义相近的子问句，多路检索后提高召回。  
+  - **HyDE（假设文档嵌入）**：先根据问题生成假设性「答案片段」，再对其做嵌入并检索相似文档，适合表述模糊或需「猜意图」的查询。  
+  - **扩展检索**：在配置允许时组合 **MQE + HyDE** 等多路结果，**合并、去重并排序**，得到更稳的候选文档集。  
+- 工具层在 `agent/tools/agent_tools.py` 中暴露了 `rag_summarize`、`rag_search_mqe`、`rag_search_hyde`、`rag_search_expanded` 等封装，供智能体按需调用。
+
+#### ReAct Agent
+
+- **作用**：实现「**推理 + 行动**」循环——模型根据当前对话决定**直接回答**或**调用工具**（校园接口、RAG 等），并支持**多轮工具调用**直至给出最终答复。  
+- **实现**：基于 **LangChain** 的 `create_agent`（运行栈与 **LangGraph** 生态衔接；中间件等类型来自 `langgraph` / `langchain.agents`），组合 **聊天模型 + 系统提示词 + 工具列表 + 中间件**。核心类为 `agent/react_agent.py` 中的 **`ReactAgent`**，对上通过 **`execute_stream`** 等形式提供**流式**输出（与 `main.py` 中组装的 `agent_messages` 衔接）。  
+- **中间件**（`agent/tools/middleware.py`）：  
+  - **`monitor_tool`**：工具调用前后打日志；在调用 `fill_context_for_report` 成功后会将运行时上下文中的 `report` 置为 `True`，便于报告类场景切换提示词。  
+  - **`log_before_model`**：每次调用模型前记录消息条数及最后一条用户/助手内容摘要；同时将当前 `state["messages"]` 中的用户与助手文本写入运行时历史（见下节）。  
+  - **`report_prompt_switch`**：根据上下文是否处于报告模式，**动态切换**系统提示（普通 `system` vs `report`）。
+
+#### 记忆功能
+
+- **滑动窗口**：配置为保留最近 **10 轮**完整对话轮次作为窗口（与 `utils/conversation_memory.py`、`config/agent.yml` 中 `conversation_window_rounds` 一致），超出部分进入摘要逻辑。  
+- **更早历史**：由对话摘要提示词将较早内容**压缩为摘要记忆**，与最近窗口一起拼进模型上下文，形成「**摘要 + 最近 10 轮 + 当前问题**」的输入结构。  
+- **摘要持久化**：每个会话使用 API 下发的 **`session_id`**；启用持久化时，摘要读写默认路径为 **`data/conversation_memory/<session_id>.json`**（`utils/conversation_summary_store.py` + `main.py`），实现**刷新页面甚至重启服务**后仍能恢复该会话的摘要记忆。  
+- **完整对话存档（与摘要分离）**：流式/非流式每轮结束后可将 user/assistant 全文落盘至 **`data/chat_history/`**（见 `utils/chat_history_store.py` 与 `main.py` 中历史接口），用于前端「历史对话」列表与恢复气泡内容。  
+- **运行时历史与 RAG 摘要集成**（`utils/runtime_history.py`）：通过 **`contextvars`** 保存当前请求/图执行链路内的对话片段；中间件在 **`log_before_model`** 阶段把本轮可序列化的 user/assistant 消息写入运行时历史，`rag_summarize` 工具在 `use_history=True` 时 **`get_history()`** 读出并传入 `rag.rag_summarize(history=...)`，使检索改写能基于**完整对话上下文**，而不是仅对当前单句 query 做扩展。
+
+#### 服务入口与 HTTP API（`main.py`）
+
+- **FastAPI** 应用：统一 CORS，挂载健康检查等基础路由。  
+- **对话**：`POST /api/chat`（非流式）、`POST /api/chat/stream`（**SSE 流式**）；流式首帧可下发 **`session_id`**，供前端多轮与历史恢复。  
+- **历史与会话列表**：`GET /api/chat/history`、`GET /api/chat/sessions`、`DELETE /api/chat/history`，与 `chat_history_store`、前端「历史」抽屉配合。  
+- **鉴权透传**：请求体中的 **`bearer_token`** 经 **`utils/unify_api_context.py`** 注入当前协程上下文，工具内 HTTP 访问 **`/unify-api/**`** 时携带与前端一致的 JWT。
+
+#### 模型与全局配置
+
+- **`model/factory.py`**：构造对话模型、嵌入模型等，供 Agent、RAG、高级检索共用。  
+- **`utils/config_handler.py`**：加载 **`config/agent.yml`**、**`config/retrieval.yml`** 及 prompts 相关 YAML，驱动窗口轮数、摘要开关与目录、检索策略、外部网关基地址（如 **`UNIFY_API_BASE_URL`**）等。
+
+#### 校园业务工具与统一接口（`agent/tools/unify_campus_tools.py`）
+
+- 将 **新闻、二手、备忘** 等能力封装为 LangChain **Tool**，由 `ReactAgent` 注册；内部通过 **`utils/unify_api_client.py`** 访问校园网关，与前端 **`/unify-api`** 前缀对齐。  
+- 与「演示/综测」类工具（`agent_tools.py` 中的学号、学期、报告上下文等）并存，便于扩展更多 **`unify_*`** 工具而不改 Agent 骨架。
+
+#### 提示词与 RAG 编排
+
+- **`utils/prompt_loader.py`**：加载 **`prompts/`** 下系统提示、对话摘要提示、报告类提示等文本，供 `ReactAgent` 与摘要链路使用。  
+- **`rag/rag_service.py`**（如 **`RagSummarizeService`**）：按策略调用向量库与 **`advanced_retrieval`**，组织检索结果并交给模型生成引用式回答，与工具层的 `rag_summarize` / 分策略工具衔接。
+
+#### 日志与观测
+
+- **`utils/logger_handler.py`**：统一日志；中间件 **`monitor_tool`**、**`log_before_model`** 会输出工具名、参数与调用模型前的消息概况，便于本地或服务器上排查「调了哪个工具、上下文多长」。
+
 ---
 
 # 3 一些说明
