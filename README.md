@@ -165,6 +165,8 @@ npm run dev
         <version>${springdoc-openapi.version}</version>   
    </dependency>  
    ```
+   
+   `/unify-conv/pom.xml` 的 `<modules>` 中加入新模块
 
 3. 启动类注解，如：  
    
